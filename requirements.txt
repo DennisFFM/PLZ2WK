@@ -1,2 +1,4 @@
 geopandas
 PyQt6
+requests
+bs4

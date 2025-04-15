@@ -1,30 +1,102 @@
+import time
 import sys
 import os
+import glob
 import pandas as pd
 from PyQt6.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, QFileDialog, QComboBox, QStyle, QDialog
+    QApplication, QWidget, QVBoxLayout, QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, QComboBox, QHeaderView, QProgressBar
 )
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QFont
+import map_data as md
+import fetch_shapes
+
+
+def resource_path(relative_path):
+    if getattr(sys, 'frozen', False):
+        base_path = sys._MEIPASS
+    else:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
 
 class AppState:
     #Paths
-    dirname = os.path.dirname(__file__)
-    BLTW = "BTW"
+    base_dir = os.path.dirname(__file__)
+    BLTW = "LTW"
     BL = "Hessen"
-    JAHR = "2025"
-    WKfilesPath = "C:\\Users\\denni\\Desktop\\PLZ2WK\\shapefiles\\WK\\"+BLTW+"\\"+JAHR
-    PLZfilesPath = "C:\\Users\\denni\\Desktop\\PLZ2WK\\shapefiles\\PLZGebiete\\OSM_PLZ.shp"
+    JAHR = "2023"
+    WKfilesPath = resource_path(os.path.join(base_dir, "data\\shapefiles\\WK\\"+BLTW+"\\Hessen\\"+JAHR))
+    PLZfilesPath = resource_path(os.path.join(base_dir, "data\\shapefiles\\PLZGebiete\\OSM_PLZ.shp"))
     WKfiles = os.listdir(WKfilesPath)
-    CSVfile = os.path.join(dirname, 'output.csv')
+    WKFile = glob.glob(WKfilesPath+'\\\\*.shp')
+    CSVfile = os.path.join(base_dir, 'output.csv')
     SelectedElection = "XXX"
 
     def UpdatePath():
-        print(AppState.BL)
         if AppState.BLTW == "BTW":
-            AppState.WKfilesPath = "C:\\Users\\denni\\Desktop\\PLZ2WK\\shapefiles\\WK\\"+AppState.BLTW+"\\"+AppState.JAHR
+            AppState.WKfilesPath = resource_path(os.path.join(AppState.base_dir, "data\\shapefiles\\WK\\"+AppState.BLTW+"\\"+AppState.JAHR))
+            AppState.WKFile = glob.glob(AppState.WKfilesPath+'\\*.shp')
         else:
-            AppState.WKfilesPath = "C:\\Users\\denni\\Desktop\\PLZ2WK\\shapefiles\\WK\\"+AppState.BLTW+"\\"+AppState.BL+"\\"+AppState.JAHR
-        print(AppState.WKfilesPath)
+            AppState.WKfilesPath = resource_path(os.path.join(AppState.base_dir, "data\\shapefiles\\WK\\"+AppState.BLTW+"\\"+AppState.BL+"\\"+AppState.JAHR))
+            AppState.WKFile = glob.glob(AppState.WKfilesPath+'\\*.shp')
 
+class SplashScreen(QWidget):
+    def __init__(self, datenmenge):
+        super().__init__()
+        self.setWindowTitle("Lade Anwendung …")
+        self.setFixedSize(800, 200)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        self.setStyleSheet("background-color: black; color: white;")
+
+        self.datenmenge = datenmenge
+        self.zähler = 0
+
+        self.label = QLabel("Starte …")
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label.setFont(QFont("Arial", 16))
+
+        self.label2 = QLabel("")
+        self.label2.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label2.setFont(QFont("Arial", 8))
+
+        self.progress = QProgressBar()
+        self.progress.setRange(0, len(self.datenmenge))
+        self.progress.setValue(0)
+        self.progress.setTextVisible(False)
+        self.progress.setStyleSheet("""
+            QProgressBar {
+                background-color: #444;
+                border: 1px solid white;
+                height: 20px;
+            }
+            QProgressBar::chunk {
+                background-color: white;
+            }
+        """)
+
+        layout = QVBoxLayout()
+        layout.addStretch()
+        layout.addWidget(self.label)
+        layout.addWidget(self.label2)
+        layout.addWidget(self.progress)
+        layout.addStretch()
+        self.setLayout(layout)
+
+        QTimer.singleShot(0, self.lade_daten)
+
+    def lade_daten(self):
+        for index, eintrag in enumerate(self.datenmenge):
+            self.label.setText(f"Lade Daten {index} von {len(self.datenmenge)} …")
+            self.label2.setText(f"Aktuell: {eintrag}")
+            self.progress.setValue(index + 1)
+
+            QApplication.processEvents()  # ⬅️ wichtig, damit GUI aktualisiert wird
+            time.sleep(0.1)
+
+        self.close()
+        self.hauptfenster = PLZ2WK()
+        self.hauptfenster.show()
 
 class SelectElection(QWidget):
 
@@ -58,8 +130,6 @@ class SelectElection(QWidget):
 
         self.setLayout(layout)
 
-    #def index_changed(self, i): # i is an int
-    #   print(i)
 
     def text_changed(self, s): # s is a str
         self.textBox.setText(s)
@@ -71,6 +141,7 @@ class SelectElection(QWidget):
     def submit_button_click(self, s):
         viewer.setWindowTitle("CSV-Wahlkreis Viewer - "+ AppState.SelectedElection)
         AppState.UpdatePath()
+        md.map_data(AppState.PLZfilesPath, AppState.WKFile, AppState.CSVfile)
         self.close()
 
 
@@ -98,11 +169,14 @@ class PLZ2WK(QWidget):
         layout.addWidget(self.label)
         layout.addWidget(self.input)
         layout.addWidget(self.search_button)
-        layout.addWidget(self.table)
+        layout.addWidget(self.table, stretch=1)
         layout.addWidget(self.dropdownWahl)
         self.setLayout(layout)
-        
-        
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header.setStretchLastSection(True)
+        self.table.resizeColumnsToContents()
+
         # Events
         self.load_button.clicked.connect(self.load_csv)
         self.search_button.clicked.connect(self.search_data)
@@ -138,9 +212,17 @@ class PLZ2WK(QWidget):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+
     viewer = PLZ2WK()
-    viewer.show()
-    popup = SelectElection()
-    popup.show()
+    daten = list(range(1, 11))  # Dummy-Zahlen 1 bis 10
+    splash = SplashScreen(fetch_shapes.FetchState.urls)
+    print(fetch_shapes.FetchState.urls)
+    splash.show()
+
+    
     #viewer.show()
+    #popup = SelectElection()
+    #popup.show()
+    #dialogue_fetch = fetch_shapes.dialogue_fetch()
+    #dialogue_fetch.show()
     sys.exit(app.exec())
