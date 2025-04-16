@@ -87,11 +87,13 @@ class SplashScreen(QWidget):
 class DownloaderApp(QWidget):
     def __init__(self, links):
         super().__init__()
-        self.setWindowTitle("Wahlkreis-Downloader")
-        self.resize(800, 600)
         self.links = links
         self.plz_shapefile = None
         self.wk_shapefile = None
+        self.ensure_plz_shapefile_exists()
+        self.setWindowTitle("Wahlkreis-Downloader")
+        self.resize(800, 600)
+
 
         self.layout = QVBoxLayout()
 
@@ -119,15 +121,48 @@ class DownloaderApp(QWidget):
         self.layout.addWidget(self.download_label)
         self.layout.addWidget(self.download_bar)
 
-        self.plz_button = QPushButton("PLZ-Daten herunterladen und entpacken")
-        self.plz_button.clicked.connect(self.download_and_extract_plz)
-        self.layout.addWidget(self.plz_button)
-
+        
         self.mapping_button = QPushButton("Wahlkreis-Shapefile laden und mit PLZ matchen")
         self.mapping_button.clicked.connect(self.load_and_map_shapefiles)
         self.layout.addWidget(self.mapping_button)
 
         self.setLayout(self.layout)
+
+    def ensure_plz_shapefile_exists(self):
+        local_filename = os.path.join(tempfile.gettempdir(), os.path.basename(PLZ_URL))
+        extract_path = os.path.join(tempfile.gettempdir(), "plz_shapefiles")
+
+        if self.plz_shapefile and os.path.exists(self.plz_shapefile):
+            return
+
+        if not os.path.exists(extract_path):
+            os.makedirs(extract_path, exist_ok=True)
+
+        if not os.path.exists(local_filename):
+            self.download_label.setText("PLZ-Daten werden heruntergeladen...")
+            try:
+                with requests.get(PLZ_URL, stream=True) as r:
+                    r.raise_for_status()
+                    with open(local_filename, 'wb') as f:
+                        for chunk in r.iter_content(chunk_size=8192):
+                            if chunk:
+                                f.write(chunk)
+            except Exception as e:
+                self.download_label.setText(f"Fehler beim PLZ-Download: {e}")
+                return
+
+        try:
+            with zipfile.ZipFile(local_filename, 'r') as zip_ref:
+                zip_ref.extractall(extract_path)
+
+            for root, dirs, files in os.walk(extract_path):
+                for file in files:
+                    if file.endswith(".shp"):
+                        self.plz_shapefile = os.path.join(root, file)
+                        return
+
+        except Exception as e:
+            self.download_label.setText(f"Fehler beim Entpacken der PLZ-Daten: {e}")
 
     def download_file(self, url):
         self.download_label.setText(f"Lade: {url}")
