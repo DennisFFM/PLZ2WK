@@ -216,7 +216,6 @@ if __name__ == "__main__":
     viewer = PLZ2WK()
     daten = list(range(1, 11))  # Dummy-Zahlen 1 bis 10
     splash = SplashScreen(fetch_shapes.FetchState.urls)
-    print(fetch_shapes.FetchState.urls)
     splash.show()
 
     
