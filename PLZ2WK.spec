@@ -1,5 +1,4 @@
 # -*- mode: python ; coding: utf-8 -*-
-#pyinstaller --onefile --windowed --clean --name "PLZ2WK" --hidden-import shapely --hidden-import shapely.geometry --hidden-import pyproj --hidden-import geopandas._compat --hidden-import pyproj.crs "PLZ2WK.py"
 
 
 a = Analysis(
