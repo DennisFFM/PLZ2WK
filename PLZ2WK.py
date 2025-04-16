@@ -101,7 +101,7 @@ class DownloaderApp(QWidget):
         self.wk_shapefile = None
         self.ensure_plz_shapefile_exists()
         self.setWindowTitle("Wahlkreis-Downloader")
-        self.resize(800, 600)
+        self.resize(1200, 600)
 
 
         self.layout = QVBoxLayout()
@@ -116,16 +116,19 @@ class DownloaderApp(QWidget):
         self.tabelle.setSortingEnabled(True)
         self.tabelle.setColumnCount(3)
         self.tabelle.setHorizontalHeaderLabels(["Jahr", "Download-Link", "Mit PLZ matchen"])
-        self.tabelle.setRowCount(len(links))
 
-        for row, (jahr, url) in enumerate(links):
+        self.tabelle.setRowCount(len(self.links))
+        
+        for row, (jahr, url) in enumerate(self.links):
             jahr_text = f"BTW {jahr}" if "bundestagswahlen" in url else str(jahr)
             self.tabelle.setItem(row, 0, QTableWidgetItem(jahr_text))
             self.tabelle.setItem(row, 1, QTableWidgetItem(url))
 
-            match_btn = QPushButton("Mit PLZ matchen")
-            match_btn.clicked.connect(partial(self.download_extract_and_map, url))
-            self.tabelle.setCellWidget(row, 2, match_btn)
+            if DOWNLOAD_REGEX.search(url):
+                match_btn = QPushButton("Mit PLZ matchen")
+                match_btn.clicked.connect(partial(self.download_extract_and_map, url))
+                self.tabelle.setCellWidget(row, 2, match_btn)
+                match_btn.setProperty("removable", True)
 
         self.download_label = QLabel("Download-Status")
         self.download_bar = QProgressBar()
@@ -135,6 +138,7 @@ class DownloaderApp(QWidget):
         self.layout.addWidget(self.download_bar)
 
         self.setLayout(self.layout)
+        self.tabelle.resizeColumnsToContents()
 
     def ensure_plz_shapefile_exists(self):
         local_filename = os.path.join(tempfile.gettempdir(), os.path.basename(PLZ_URL))
@@ -282,22 +286,32 @@ class DownloaderApp(QWidget):
                 raise ValueError(f"Keine geeignete Wahlkreis-Spalte gefunden. Verfügbare Spalten: {list(gdf_joined.columns)}")
 
             wkr_spalte = wk_spalten[0]
-            result_df = gdf_joined[["plz", wkr_spalte]].drop_duplicates()
+            result_df = gdf_joined[["plz", wkr_spalte, "note", "einwohner", "qkm"]].drop_duplicates()
 
             self.tabelle.setRowCount(len(result_df))
-            self.tabelle.setColumnCount(2)
-            self.tabelle.setHorizontalHeaderLabels(["PLZ", "Wahlkreis"])
+            self.tabelle.setColumnCount(5)
+            self.tabelle.setHorizontalHeaderLabels(["PLZ", "Wahlkreis", "Hinweis", "Einwohner", "Fläche (qkm)"])
+
+
+            # Entferne alle vorherigen Buttons
+            for row in range(self.tabelle.rowCount()):
+                widget = self.tabelle.cellWidget(row, 2)
+                if widget and widget.property("removable"):
+                    self.tabelle.removeCellWidget(row, 2)
             for i, row in result_df.iterrows():
                 self.tabelle.setItem(i, 0, QTableWidgetItem(str(row["plz"])))
                 self.tabelle.setItem(i, 1, QTableWidgetItem(str(row[wkr_spalte])))
+                self.tabelle.setItem(i, 2, QTableWidgetItem(str(row.get("note", ""))))
+                self.tabelle.setItem(i, 3, QTableWidgetItem(str(row.get("einwohner", ""))))
+                self.tabelle.setItem(i, 4, QTableWidgetItem(str(row.get("qkm", ""))))
 
                 self.download_label.setText("Mapping abgeschlossen.")
-            self.filter_input.show()
+                self.filter_input.show()
 
         except Exception as e:
             self.download_label.setText(f"Fehler beim Mapping: {e}")
 
-
+        self.tabelle.resizeColumnsToContents()
 
 
     def load_and_map_shapefiles(self):
