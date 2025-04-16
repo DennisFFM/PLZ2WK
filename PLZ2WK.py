@@ -1,227 +1,294 @@
-import time
 import sys
 import os
-import glob
-import pandas as pd
+import re
+import zipfile
+import requests
+import tempfile
+from bs4 import BeautifulSoup
+from datetime import datetime
 from PyQt6.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, QComboBox, QHeaderView, QProgressBar
+    QApplication, QWidget, QVBoxLayout, QLabel, QProgressBar, QPushButton,
+    QTableWidget, QTableWidgetItem, QHBoxLayout, QSplashScreen, QFileDialog, QLineEdit
 )
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QFont
-import map_data as md
-import fetch_shapes
+from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
+from PyQt6.QtGui import QFont, QColor, QPixmap
+import pandas as pd
+from functools import partial
+import geopandas as gpd
 
+STARTJAHR = 2017
+AKTUELLES_JAHR = datetime.now().year
+BASIS_URL = "https://www.bundeswahlleiterin.de/bundestagswahlen/{}/wahlkreiseinteilung/downloads.html"
+DOWNLOAD_REGEX = re.compile(r"geometrie_wahlkreise_vg250_(geo_shp|shp_geo)\.zip", re.IGNORECASE)
+PLZ_URL = "https://services2.arcgis.com/jUpNdisbWqRpMo35/arcgis/rest/services/PLZ_Gebiete/FeatureServer/replicafilescache/PLZ_Gebiete_-6414732440474739110.zip"
 
-def resource_path(relative_path):
-    if getattr(sys, 'frozen', False):
-        base_path = sys._MEIPASS
-    else:
-        base_path = os.path.abspath(".")
+class ScraperThread(QThread):
+    progress = pyqtSignal(int, int)
+    url_checked = pyqtSignal(str, bool)
+    finished = pyqtSignal(list)
 
-    return os.path.join(base_path, relative_path)
-
-class AppState:
-    #Paths
-    base_dir = os.path.dirname(__file__)
-    BLTW = "LTW"
-    BL = "Hessen"
-    JAHR = "2023"
-    WKfilesPath = resource_path(os.path.join(base_dir, "data\\shapefiles\\WK\\"+BLTW+"\\Hessen\\"+JAHR))
-    PLZfilesPath = resource_path(os.path.join(base_dir, "data\\shapefiles\\PLZGebiete\\OSM_PLZ.shp"))
-    WKfiles = os.listdir(WKfilesPath)
-    WKFile = glob.glob(WKfilesPath+'\\\\*.shp')
-    CSVfile = os.path.join(base_dir, 'output.csv')
-    SelectedElection = "XXX"
-
-    def UpdatePath():
-        if AppState.BLTW == "BTW":
-            AppState.WKfilesPath = resource_path(os.path.join(AppState.base_dir, "data\\shapefiles\\WK\\"+AppState.BLTW+"\\"+AppState.JAHR))
-            AppState.WKFile = glob.glob(AppState.WKfilesPath+'\\*.shp')
-        else:
-            AppState.WKfilesPath = resource_path(os.path.join(AppState.base_dir, "data\\shapefiles\\WK\\"+AppState.BLTW+"\\"+AppState.BL+"\\"+AppState.JAHR))
-            AppState.WKFile = glob.glob(AppState.WKfilesPath+'\\*.shp')
+    def run(self):
+        self.links = []
+        jahre = list(range(STARTJAHR, AKTUELLES_JAHR + 1))
+        for index, jahr in enumerate(jahre):
+            url = BASIS_URL.format(jahr)
+            try:
+                r = requests.get(url, timeout=10)
+                soup = BeautifulSoup(r.text, 'html.parser')
+                link_tags = soup.find_all('a', href=True)
+                matching_links = [tag['href'] for tag in link_tags if DOWNLOAD_REGEX.search(tag['href'])]
+                if matching_links:
+                    for link in matching_links:
+                        full_link = requests.compat.urljoin(url, link)
+                        self.links.append((jahr, full_link))
+                    self.url_checked.emit(url, True)
+                else:
+                    self.url_checked.emit(url, False)
+            except Exception as e:
+                print(f"Fehler beim Abrufen von {url}: {e}")
+                self.url_checked.emit(url, False)
+            self.progress.emit(index + 1, len(jahre))
+        self.finished.emit(self.links)
 
 class SplashScreen(QWidget):
-    def __init__(self, datenmenge):
+    def __init__(self, total):
         super().__init__()
-        self.setWindowTitle("Lade Anwendung …")
-        self.setFixedSize(800, 200)
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        self.setWindowTitle("Daten werden geladen ...")
+        self.resize(600, 200)
         self.setStyleSheet("background-color: black; color: white;")
 
-        self.datenmenge = datenmenge
-        self.zähler = 0
-
-        self.label = QLabel("Starte …")
+        self.layout = QVBoxLayout()
+        self.label = QLabel("Initialisiere ...")
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.label.setFont(QFont("Arial", 16))
-
-        self.label2 = QLabel("")
-        self.label2.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.label2.setFont(QFont("Arial", 8))
+        self.label.setFont(QFont("Arial", 12))
 
         self.progress = QProgressBar()
-        self.progress.setRange(0, len(self.datenmenge))
+        self.progress.setRange(0, total)
         self.progress.setValue(0)
-        self.progress.setTextVisible(False)
-        self.progress.setStyleSheet("""
-            QProgressBar {
-                background-color: #444;
-                border: 1px solid white;
-                height: 20px;
-            }
-            QProgressBar::chunk {
-                background-color: white;
-            }
-        """)
+        self.progress.setStyleSheet("QProgressBar::chunk { background-color: white; }")
 
-        layout = QVBoxLayout()
-        layout.addStretch()
-        layout.addWidget(self.label)
-        layout.addWidget(self.label2)
-        layout.addWidget(self.progress)
-        layout.addStretch()
-        self.setLayout(layout)
+        self.log = QLabel("")
+        self.log.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.log.setWordWrap(True)
 
-        QTimer.singleShot(0, self.lade_daten)
+        self.layout.addWidget(self.label)
+        self.layout.addWidget(self.progress)
+        self.layout.addWidget(self.log)
+        self.setLayout(self.layout)
 
-    def lade_daten(self):
-        for index, eintrag in enumerate(self.datenmenge):
-            self.label.setText(f"Lade Daten {index} von {len(self.datenmenge)} …")
-            self.label2.setText(f"Aktuell: {eintrag}")
-            self.progress.setValue(index + 1)
+    def update_progress(self, current, total):
+        self.label.setText(f"{current} von {total} Jahren verarbeitet ...")
+        self.progress.setValue(current)
 
-            QApplication.processEvents()  # ⬅️ wichtig, damit GUI aktualisiert wird
-            time.sleep(0.1)
+    def log_url(self, url, success):
+        color = "green" if success else "red"
+        self.log.setText(f"<span style='color:{color}'>{url}</span>")
 
-        self.close()
-        self.hauptfenster = PLZ2WK()
-        self.hauptfenster.show()
-
-class SelectElection(QWidget):
-
-    def __init__(self):
+class DownloaderApp(QWidget):
+    def __init__(self, links):
         super().__init__()
-        layout = QVBoxLayout()
-        self.setWindowTitle("Startup")
-        self.textBox = QLabel("Bitte wähle eine Wahl")
-        self.submit_button = QPushButton("Select")
-
-        self.dropdownWahl = QComboBox()
-        self.dropdownWahl.addItem("LTW Hessen 2023")
-        self.dropdownWahl.addItem("LTW Baden-Württemberg 2023")
-        self.dropdownWahl.addItem("BTW 2025")
-        
-        cs = self.dropdownWahl.currentText()
-        AppState.SelectedElection = cs
-        AppState.BLTW = cs.split()[0]
-        AppState.BL = cs.split()[1]
-        AppState.JAHR = cs.split()[-1]
-        AppState.UpdatePath()
-
-        layout.addWidget(self.textBox)
-        layout.addWidget(self.dropdownWahl)
-        layout.addWidget(self.submit_button)
-
-        # Events
-        #self.dropdownWahl.currentIndexChanged.connect( self.index_changed )
-        self.dropdownWahl.currentTextChanged.connect( self.text_changed )
-        self.submit_button.clicked.connect(self.submit_button_click)
-
-        self.setLayout(layout)
-
-
-    def text_changed(self, s): # s is a str
-        self.textBox.setText(s)
-        AppState.SelectedElection = s
-        AppState.BLTW = s.split()[0]
-        AppState.BL = s.split()[1]
-        AppState.JAHR = s.split()[-1]
-
-    def submit_button_click(self, s):
-        viewer.setWindowTitle("CSV-Wahlkreis Viewer - "+ AppState.SelectedElection)
-        AppState.UpdatePath()
-        md.map_data(AppState.PLZfilesPath, AppState.WKFile, AppState.CSVfile)
-        self.close()
-
-
-class PLZ2WK(QWidget):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("CSV-Wahlkreis Viewer")
+        self.setWindowTitle("Wahlkreis-Downloader")
         self.resize(800, 600)
+        self.links = links
+        self.plz_shapefile = None
+        self.wk_shapefile = None
 
-        # Widgets
-        self.label = QLabel("Suchbegriff (PLZ oder Wahlkreis):")
-        self.input = QLineEdit()
-        self.search_button = QPushButton("Suchen")
-        self.load_button = QPushButton("CSV laden")
-        self.table = QTableWidget()
-        self.dropdownWahl = QComboBox()
-        
+        self.layout = QVBoxLayout()
 
-        for f in AppState.WKfiles:
-            self.dropdownWahl.addItem(f)
+        self.tabelle = QTableWidget()
+        self.tabelle.setColumnCount(4)
+        self.tabelle.setHorizontalHeaderLabels(["Jahr", "Download-Link", "Herunterladen", "Mit PLZ matchen"])
+        self.tabelle.setRowCount(len(links))
 
-        # Layout
-        layout = QVBoxLayout()
-        layout.addWidget(self.load_button)
-        layout.addWidget(self.label)
-        layout.addWidget(self.input)
-        layout.addWidget(self.search_button)
-        layout.addWidget(self.table, stretch=1)
-        layout.addWidget(self.dropdownWahl)
-        self.setLayout(layout)
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        header.setStretchLastSection(True)
-        self.table.resizeColumnsToContents()
+        for row, (jahr, url) in enumerate(links):
+            self.tabelle.setItem(row, 0, QTableWidgetItem(str(jahr)))
+            self.tabelle.setItem(row, 1, QTableWidgetItem(url))
 
-        # Events
-        self.load_button.clicked.connect(self.load_csv)
-        self.search_button.clicked.connect(self.search_data)
+            download_btn = QPushButton("Herunterladen")
+            download_btn.clicked.connect(partial(self.download_file, url))
+            self.tabelle.setCellWidget(row, 2, download_btn)
 
-        self.df = pd.DataFrame()  # Leerer DataFrame beim Start
+            match_btn = QPushButton("Mit PLZ matchen")
+            match_btn.clicked.connect(partial(self.download_extract_and_map, url))
+            self.tabelle.setCellWidget(row, 3, match_btn)
 
+        self.download_label = QLabel("Download-Status")
+        self.download_bar = QProgressBar()
 
-    def load_csv(self):
-        #file_path, _ = QFileDialog.getOpenFileName(self, "CSV-Datei auswählen", "", "CSV Files (*.csv)")
-        #if file_path:
-        self.df = pd.read_csv(AppState.CSVfile, dtype=str)  # Lese alle Spalten als Text
-        self.populate_table(self.df)
+        self.layout.addWidget(self.tabelle)
+        self.layout.addWidget(self.download_label)
+        self.layout.addWidget(self.download_bar)
 
-    def search_data(self):
-        query = self.input.text().strip()
-        if self.df.empty or not query:
+        self.plz_button = QPushButton("PLZ-Daten herunterladen und entpacken")
+        self.plz_button.clicked.connect(self.download_and_extract_plz)
+        self.layout.addWidget(self.plz_button)
+
+        self.mapping_button = QPushButton("Wahlkreis-Shapefile laden und mit PLZ matchen")
+        self.mapping_button.clicked.connect(self.load_and_map_shapefiles)
+        self.layout.addWidget(self.mapping_button)
+
+        self.setLayout(self.layout)
+
+    def download_file(self, url):
+        self.download_label.setText(f"Lade: {url}")
+        local_filename = os.path.join(tempfile.gettempdir(), os.path.basename(url))
+        try:
+            with requests.get(url, stream=True) as r:
+                r.raise_for_status()
+                total = int(r.headers.get('content-length', 0))
+                downloaded = 0
+                with open(local_filename, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if total > 0:
+                                percent = int(downloaded * 100 / total)
+                                self.download_bar.setValue(percent)
+            self.download_label.setText(f"Download abgeschlossen: {local_filename}")
+        except Exception as e:
+            self.download_label.setText(f"Fehler: {e}")
+
+    def download_and_extract_plz(self):
+        self.download_label.setText("Lade PLZ-Daten...")
+        local_filename = os.path.join(tempfile.gettempdir(), os.path.basename(PLZ_URL))
+        try:
+            with requests.get(PLZ_URL, stream=True) as r:
+                r.raise_for_status()
+                total = int(r.headers.get('content-length', 0))
+                downloaded = 0
+                with open(local_filename, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if total > 0:
+                                percent = int(downloaded * 100 / total)
+                                self.download_bar.setValue(percent)
+
+            with zipfile.ZipFile(local_filename, 'r') as zip_ref:
+                extract_path = os.path.join(tempfile.gettempdir(), "plz_shapefiles")
+                zip_ref.extractall(extract_path)
+
+            self.download_label.setText(f"PLZ-Daten entpackt: {extract_path}")
+
+            # Suche nach der .shp-Datei
+            for root, dirs, files in os.walk(extract_path):
+                for file in files:
+                    if file.endswith(".shp"):
+                        self.plz_shapefile = os.path.join(root, file)
+                        break
+        except Exception as e:
+            self.download_label.setText(f"Fehler beim PLZ-Download: {e}")
+
+    def download_extract_and_map(self, url):
+        if not self.plz_shapefile:
+            self.download_label.setText("PLZ-Shapefile nicht gefunden. Bitte zuerst PLZ-Daten laden.")
             return
 
-        filtered = self.df[
-            self.df.apply(lambda row: row.astype(str).str.contains(query, case=False, na=False).any(), axis=1)
-        ]
-        self.populate_table(filtered)
+        self.download_label.setText("Lade Wahlkreisdaten...")
+        local_filename = os.path.join(tempfile.gettempdir(), os.path.basename(url))
+        extract_path = os.path.join(tempfile.gettempdir(), os.path.splitext(os.path.basename(url))[0])
 
-    def populate_table(self, df):
-        self.table.setRowCount(len(df))
-        self.table.setColumnCount(len(df.columns))
-        self.table.setHorizontalHeaderLabels(df.columns)
+        try:
+            if not os.path.exists(local_filename):
+                with requests.get(url, stream=True) as r:
+                    r.raise_for_status()
+                    with open(local_filename, 'wb') as f:
+                        for chunk in r.iter_content(chunk_size=8192):
+                            if chunk:
+                                f.write(chunk)
 
-        for row in range(len(df)):
-            for col, column_name in enumerate(df.columns):
-                item = QTableWidgetItem(str(df.iloc[row][column_name]))
-                self.table.setItem(row, col, item)
+            with zipfile.ZipFile(local_filename, 'r') as zip_ref:
+                zip_ref.extractall(extract_path)
 
-if __name__ == "__main__":
+            wk_shapefile = None
+            for root, dirs, files in os.walk(extract_path):
+                for file in files:
+                    if file.endswith(".shp"):
+                        wk_shapefile = os.path.join(root, file)
+                        break
+
+            if not wk_shapefile:
+                self.download_label.setText("Keine Shapefile in ZIP gefunden.")
+                return
+
+            self.download_label.setText("Verarbeite Geodaten...")
+
+            gdf_plz = gpd.read_file(self.plz_shapefile).to_crs("EPSG:25832")
+            gdf_wk = gpd.read_file(wk_shapefile).to_crs("EPSG:25832")
+
+            gdf_joined = gpd.sjoin(gdf_plz, gdf_wk, how="inner", predicate="intersects")
+
+            # Versuche dynamisch eine geeignete Spalte für den Wahlkreis zu identifizieren
+            wk_spalten = [col for col in gdf_joined.columns if col.lower() in ["wknr", "wkr_nr", "nummer", "wahlkreis", "wkr"] or col.lower().startswith("wk")]
+
+            if not wk_spalten:
+                raise ValueError(f"Keine geeignete Wahlkreis-Spalte gefunden. Verfügbare Spalten: {list(gdf_joined.columns)}")
+
+            wkr_spalte = wk_spalten[0]
+            result_df = gdf_joined[["plz", wkr_spalte]].drop_duplicates()
+
+            self.tabelle.setRowCount(len(result_df))
+            self.tabelle.setColumnCount(2)
+            self.tabelle.setHorizontalHeaderLabels(["PLZ", "Wahlkreis"])
+            for i, row in result_df.iterrows():
+                self.tabelle.setItem(i, 0, QTableWidgetItem(str(row["plz"])))
+                self.tabelle.setItem(i, 1, QTableWidgetItem(str(row[wkr_spalte])))
+
+                self.download_label.setText("Mapping abgeschlossen.")
+
+        except Exception as e:
+            self.download_label.setText(f"Fehler beim Mapping: {e}")
+
+
+    def load_and_map_shapefiles(self):
+        if not self.plz_shapefile:
+            self.download_label.setText("PLZ-Shapefile nicht gefunden. Bitte zuerst PLZ-Daten laden.")
+            return
+
+        shp_path, _ = QFileDialog.getOpenFileName(self, "Wahlkreis-Shapefile auswählen", "", "Shapefiles (*.shp)")
+        if not shp_path:
+            return
+
+        self.download_label.setText("Lade und verarbeite Shapefiles...")
+
+        try:
+            gdf_plz = gpd.read_file(self.plz_shapefile).to_crs("EPSG:25832")
+            gdf_wk = gpd.read_file(shp_path).to_crs("EPSG:25832")
+
+            gdf_joined = gpd.sjoin(gdf_plz, gdf_wk, how="inner", predicate="intersects")
+            result_df = gdf_joined[["plz", "WKNR"]].drop_duplicates()
+
+            # Ergebnis anzeigen (z. B. als neue Tabelle)
+            self.tabelle.setRowCount(len(result_df))
+            self.tabelle.setColumnCount(2)
+            self.tabelle.setHorizontalHeaderLabels(["PLZ", "Wahlkreis"])
+            for i, row in result_df.iterrows():
+                self.tabelle.setItem(i, 0, QTableWidgetItem(str(row["plz"])))
+                self.tabelle.setItem(i, 1, QTableWidgetItem(str(row["WKNR"])))
+
+            self.download_label.setText("Mapping abgeschlossen.")
+        except Exception as e:
+            self.download_label.setText(f"Fehler beim Mapping: {e}")
+
+if __name__ == '__main__':
     app = QApplication(sys.argv)
 
-    viewer = PLZ2WK()
-    daten = list(range(1, 11))  # Dummy-Zahlen 1 bis 10
-    splash = SplashScreen(fetch_shapes.FetchState.urls)
+    splash = SplashScreen(total=AKTUELLES_JAHR - STARTJAHR + 1)
     splash.show()
 
-    
-    #viewer.show()
-    #popup = SelectElection()
-    #popup.show()
-    #dialogue_fetch = fetch_shapes.dialogue_fetch()
-    #dialogue_fetch.show()
+    def show_main_window(links):
+      global hauptfenster  # Referenz behalten, sonst wird das Fenster geschlossen
+      splash.close()
+      hauptfenster = DownloaderApp(links)
+      hauptfenster.show()
+
+
+    scraper = ScraperThread()
+    scraper.progress.connect(splash.update_progress)
+    scraper.url_checked.connect(splash.log_url)
+    scraper.finished.connect(show_main_window)
+    scraper.start()
+
     sys.exit(app.exec())
