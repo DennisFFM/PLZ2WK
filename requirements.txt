@@ -1,4 +1,7 @@
 geopandas
 PyQt6
+geopandas
 requests
 bs4
+openpyxl
+pandas

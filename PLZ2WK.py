@@ -7,12 +7,12 @@ import tempfile
 from bs4 import BeautifulSoup
 from datetime import datetime
 from PyQt6.QtWidgets import (
-    QMainWindow, QMenuBar, QMenu, QMessageBox,
+    QMainWindow, QMessageBox,
     QApplication, QWidget, QVBoxLayout, QLabel, QProgressBar, QPushButton,
-    QTableWidget, QTableWidgetItem, QHBoxLayout, QSplashScreen, QFileDialog, QLineEdit
+    QTableWidget, QTableWidgetItem, QFileDialog, QLineEdit
 )
-from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
-from PyQt6.QtGui import QFont, QColor, QPixmap, QAction
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QFont, QAction
 import pandas as pd
 from functools import partial
 import geopandas as gpd
@@ -84,8 +84,12 @@ class DownloaderApp(QMainWindow):
                 padding: 6px;
                 border-radius: 4px;
             }
+            QPushButton:disabled {
+                background-color: #444;
+                color: #aaa;
+            }
             QPushButton:hover {
-                background-color: #2e5ea1;
+                background-color: #218838;
             }
             QLineEdit {
                 padding: 4px;
@@ -109,7 +113,6 @@ class DownloaderApp(QMainWindow):
             }
         """)
 
-        # Menüleiste
         menubar = self.menuBar()
         datei_menu = menubar.addMenu("Datei")
         info_menu = menubar.addMenu("Info")
@@ -159,17 +162,23 @@ class DownloaderApp(QMainWindow):
         self.tabelle = QTableWidget()
         self.tabelle.setSortingEnabled(True)
         self.tabelle.setColumnCount(3)
-        self.tabelle.setHorizontalHeaderLabels(["Jahr", "Download-Link", "Mit PLZ matchen"])
+        self.tabelle.setHorizontalHeaderLabels(["Jahr", "Download-Link", ""])
+
+        self.excel_upload_btn = QPushButton("Datei hochladen (Excel/CSV)")
+        self.excel_upload_btn.setToolTip("Lade z.B. eine Wählerliste mit Postleitzahlen hoch,\num sie Wahlkreisen zuzuordnen.")
+        self.excel_upload_btn.clicked.connect(self.upload_excel_and_map)
+        self.layout.addWidget(self.excel_upload_btn)
+        self.excel_upload_btn.setEnabled(False)
 
         self.tabelle.setRowCount(len(self.links))
         
         for row, (jahr, url) in enumerate(self.links):
-            jahr_text = f"BTW {jahr}" if "bundestagswahlen" in url else str(jahr)
+            jahr_text = f"BTW {jahr}" if "btw" in url else str(jahr)
             self.tabelle.setItem(row, 0, QTableWidgetItem(jahr_text))
             self.tabelle.setItem(row, 1, QTableWidgetItem(url))
 
             if DOWNLOAD_REGEX.search(url):
-                match_btn = QPushButton("Mit PLZ matchen")
+                match_btn = QPushButton("Auswählen")
                 match_btn.clicked.connect(partial(self.download_extract_and_map, url))
                 self.tabelle.setCellWidget(row, 2, match_btn)
                 match_btn.setProperty("removable", True)
@@ -185,6 +194,30 @@ class DownloaderApp(QMainWindow):
         self.tabelle.resizeColumnsToContents()
         total_width = sum([self.tabelle.columnWidth(i) for i in range(self.tabelle.columnCount())])
         self.resize(total_width + 60, self.tabelle.sizeHint().height() + 150)
+
+    def reset_to_start(self):
+        self.tabelle.setRowCount(len(self.links))
+        self.tabelle.setColumnCount(3)
+        self.tabelle.setHorizontalHeaderLabels(["Jahr", "Download-Link", ""])
+        self.filter_input.hide()
+        self.back_button.hide()
+
+        for row, (jahr, url) in enumerate(self.links):
+            jahr_text = f"BTW {jahr}" if "btw" in url else str(jahr)
+            self.tabelle.setItem(row, 0, QTableWidgetItem(jahr_text))
+            self.tabelle.setItem(row, 1, QTableWidgetItem(url))
+
+            if DOWNLOAD_REGEX.search(url):
+                match_btn = QPushButton("Auswählen")
+                match_btn.clicked.connect(partial(self.download_extract_and_map, url))
+                match_btn.setProperty("removable", True)
+                self.tabelle.setCellWidget(row, 2, match_btn)
+
+        self.tabelle.resizeColumnsToContents()
+        total_width = sum([self.tabelle.columnWidth(i) for i in range(self.tabelle.columnCount())])
+        self.resize(total_width + 80, self.tabelle.sizeHint().height() + 150)
+
+
         
 
     def ensure_plz_shapefile_exists(self):
@@ -246,17 +279,17 @@ class DownloaderApp(QMainWindow):
     def download_and_extract_plz(self):
         self.tabelle.setRowCount(len(self.links))
         self.tabelle.setColumnCount(3)
-        self.tabelle.setHorizontalHeaderLabels(["Jahr", "Download-Link", "Mit PLZ matchen"])
+        self.tabelle.setHorizontalHeaderLabels(["Jahr", "Download-Link", ""])
         self.filter_input.hide()
         self.back_button.hide()
 
         for row, (jahr, url) in enumerate(self.links):
-            jahr_text = f"BTW {jahr}" if "bundestagswahlen" in url else str(jahr)
+            jahr_text = f"BTW {jahr}" if "btw" in url else str(jahr)
             self.tabelle.setItem(row, 0, QTableWidgetItem(jahr_text))
             self.tabelle.setItem(row, 1, QTableWidgetItem(url))
 
             if DOWNLOAD_REGEX.search(url):
-                match_btn = QPushButton("Mit PLZ matchen")
+                match_btn = QPushButton("Auswählen")
                 match_btn.clicked.connect(partial(self.download_extract_and_map, url))
                 match_btn.setProperty("removable", True)
                 self.tabelle.setCellWidget(row, 2, match_btn)
@@ -265,33 +298,65 @@ class DownloaderApp(QMainWindow):
         total_width = sum([self.tabelle.columnWidth(i) for i in range(self.tabelle.columnCount())])
         self.resize(total_width + 80, self.tabelle.sizeHint().height() + 150)
 
-    def reset_to_start(self):
-        self.tabelle.setRowCount(len(self.links))
-        self.tabelle.setColumnCount(3)
-        self.tabelle.setHorizontalHeaderLabels(["Jahr", "Download-Link", "Mit PLZ matchen"])
-        self.filter_input.hide()
-        self.back_button.hide()
+    def upload_excel_and_map(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "Excel-Datei auswählen", "", "Excel-Dateien (*.xlsx *.xls *.csv)")
+        if not file_path:
+            return
 
-        for row, (jahr, url) in enumerate(self.links):
-            jahr_text = f"BTW {jahr}" if "bundestagswahlen" in url else str(jahr)
-            self.tabelle.setItem(row, 0, QTableWidgetItem(jahr_text))
-            self.tabelle.setItem(row, 1, QTableWidgetItem(url))
+        try:
+            if file_path.endswith(".csv"):
+                df = pd.read_csv(file_path, dtype=str)
+            else:
+                df = pd.read_excel(file_path, dtype=str)
 
-            if DOWNLOAD_REGEX.search(url):
-                match_btn = QPushButton("Mit PLZ matchen")
-                match_btn.clicked.connect(partial(self.download_extract_and_map, url))
-                match_btn.setProperty("removable", True)
-                self.tabelle.setCellWidget(row, 2, match_btn)
+            plz_spalten = [col for col in df.columns if col.lower() in ["plz", "postleitzahl"]]
+            if not plz_spalten:
+                QMessageBox.warning(self, "Fehlende Spalte", "Die Datei muss eine Spalte namens 'plz' oder 'Postleitzahl' enthalten.")
+                return
 
-        self.tabelle.resizeColumnsToContents()
-        total_width = sum([self.tabelle.columnWidth(i) for i in range(self.tabelle.columnCount())])
-        self.resize(total_width + 80, self.tabelle.sizeHint().height() + 150)
+            df.rename(columns={plz_spalten[0]: "plz"}, inplace=True)
+
+            df["plz"] = df["plz"].astype(str).str.lower()
+
+            gdf_plz = gpd.read_file(self.plz_shapefile).to_crs("EPSG:25832")
+            gdf_plz["plz"] = gdf_plz["plz"].astype(str).str.lower()
+            df_plz_geom = pd.merge(df, gdf_plz[["plz", "geometry"]], on="plz", how="left")
+            gdf_plz_geom = gpd.GeoDataFrame(df_plz_geom, geometry="geometry", crs=gdf_plz.crs)
+
+            wk_shapefile = self.wk_shapefile
+            if not self.wk_shapefile:
+                QMessageBox.warning(self, "Kein Wahlkreis-Shapefile", "Bitte zuerst eine Wahl auswählen.")
+                return
+            if not wk_shapefile:
+                return
+
+            gdf_wk = gpd.read_file(self.wk_shapefile).to_crs("EPSG:25832")
+            gdf_joined = gpd.sjoin(gdf_plz_geom, gdf_wk, how="left", predicate="intersects")
+            wk_spalten = [col for col in gdf_joined.columns if col.lower() in ["wknr", "wkr_nr", "nummer", "wahlkreis", "wkr"] or col.lower().startswith("wk")]
+
+            if wk_spalten:
+                gdf_joined.rename(columns={wk_spalten[0]: "wahlkreis"}, inplace=True)
+
+            merged = gdf_joined[[*df.columns, "wahlkreis"]] if "wahlkreis" in gdf_joined.columns else df
+
+            self.tabelle.setRowCount(len(merged))
+            self.tabelle.setColumnCount(len(merged.columns))
+            self.tabelle.setHorizontalHeaderLabels(merged.columns.tolist())
+
+            for i, row in merged.iterrows():
+                for j, col in enumerate(merged.columns):
+                    self.tabelle.setItem(i, j, QTableWidgetItem(str(row[col])))
+
+            self.download_label.setText("Mapping abgeschlossen.")
+            self.filter_input.show()
+            self.back_button.show()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Fehler beim Excel-Mapping", str(e))
+            self.download_label.setText("Fehler beim Mapping.")
 
     def show_about_dialog(self):
-        QMessageBox.about(self, "Über", "Wahlkreis-PLZ-Mapper\n© 2025 Deine Firma oder Name")
-
-    def show_about_dialog(self):
-        QMessageBox.about(self, "Über", "Wahlkreis-PLZ-Mapper \n© 2025 Deine Firma oder Name")
+        QMessageBox.about(self, "Über", "PLZ2WK - Der Wahlkreis-PLZ-Mapper\n© 2025 Dennis Wörner")
 
     def export_csv(self):
         path, _ = QFileDialog.getSaveFileName(self, "CSV speichern", "ergebnisse.csv", "CSV-Dateien (*.csv)")
@@ -324,6 +389,7 @@ class DownloaderApp(QMainWindow):
             self.tabelle.setRowHidden(row, not match)
 
     def download_extract_and_map(self, url):
+        self.excel_upload_btn.setEnabled(True)
         if not self.plz_shapefile:
             self.download_label.setText("PLZ-Shapefile nicht gefunden. Bitte zuerst PLZ-Daten laden.")
             return
@@ -344,25 +410,24 @@ class DownloaderApp(QMainWindow):
             with zipfile.ZipFile(local_filename, 'r') as zip_ref:
                 zip_ref.extractall(extract_path)
 
-            wk_shapefile = None
+            self.wk_shapefile = None
             for root, dirs, files in os.walk(extract_path):
                 for file in files:
                     if file.endswith(".shp"):
-                        wk_shapefile = os.path.join(root, file)
+                        self.wk_shapefile = os.path.join(root, file)
                         break
 
-            if not wk_shapefile:
+            if not self.wk_shapefile:
                 self.download_label.setText("Keine Shapefile in ZIP gefunden.")
                 return
 
             self.download_label.setText("Verarbeite Geodaten...")
 
             gdf_plz = gpd.read_file(self.plz_shapefile).to_crs("EPSG:25832")
-            gdf_wk = gpd.read_file(wk_shapefile).to_crs("EPSG:25832")
+            gdf_wk = gpd.read_file(self.wk_shapefile).to_crs("EPSG:25832")
 
             gdf_joined = gpd.sjoin(gdf_plz, gdf_wk, how="inner", predicate="intersects")
 
-            # Versuche dynamisch eine geeignete Spalte für den Wahlkreis zu identifizieren
             wk_spalten = [col for col in gdf_joined.columns if col.lower() in ["wknr", "wkr_nr", "nummer", "wahlkreis", "wkr"] or col.lower().startswith("wk")]
 
             if not wk_spalten:
@@ -375,8 +440,6 @@ class DownloaderApp(QMainWindow):
             self.tabelle.setColumnCount(5)
             self.tabelle.setHorizontalHeaderLabels(["PLZ", "Wahlkreis", "Hinweis", "Einwohner", "Fläche (qkm)"])
 
-
-            # Entferne alle vorherigen Buttons
             for row in range(self.tabelle.rowCount()):
                 widget = self.tabelle.cellWidget(row, 2)
                 if widget and widget.property("removable"):
@@ -418,7 +481,6 @@ class DownloaderApp(QMainWindow):
             gdf_joined = gpd.sjoin(gdf_plz, gdf_wk, how="inner", predicate="intersects")
             result_df = gdf_joined[["plz", "WKNR"]].drop_duplicates()
 
-            # Ergebnis anzeigen (z. B. als neue Tabelle)
             self.tabelle.setRowCount(len(result_df))
             self.tabelle.setColumnCount(2)
             self.tabelle.setHorizontalHeaderLabels(["PLZ", "Wahlkreis"])
@@ -444,8 +506,6 @@ if __name__ == '__main__':
 
 
     scraper = ScraperThread()
-    # Verknüpfung entfällt für SplashScreen
-    # Verknüpfung entfällt für SplashScreen
     scraper.finished.connect(lambda links: show_main_window(links))
     scraper.start()
 
