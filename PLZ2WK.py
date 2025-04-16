@@ -70,12 +70,53 @@ class DownloaderApp(QMainWindow):
         super().__init__()
         self.setWindowTitle("Wahlkreis-PLZ-Mapper")
         self.resize(600, 200)
-        self.setStyleSheet("background-color: black; color: white;")
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #2c2c2c;
+            }
+            QLabel {
+                color: #f0f0f0;
+                font-size: 14px;
+            }
+            QPushButton {
+                background-color: #3a77c3;
+                color: white;
+                padding: 6px;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #2e5ea1;
+            }
+            QLineEdit {
+                padding: 4px;
+                border: 1px solid #555;
+                border-radius: 4px;
+                background-color: #444;
+                color: #f0f0f0;
+            }
+            QTableWidget {
+                gridline-color: #444;
+                background-color: #3a3a3a;
+                alternate-background-color: #2e2e2e;
+                selection-background-color: #5a5a5a;
+                color: #f0f0f0;
+            }
+            QHeaderView::section {
+                background-color: #444;
+                padding: 4px;
+                border: 1px solid #666;
+                color: #f0f0f0;
+            }
+        """)
 
         # Menüleiste
         menubar = self.menuBar()
         datei_menu = menubar.addMenu("Datei")
         info_menu = menubar.addMenu("Info")
+
+        export_action = QAction("Export als CSV", self)
+        export_action.triggered.connect(self.export_csv)
+        datei_menu.addAction(export_action)
 
         neustarten_action = QAction("Neustarten", self)
         neustarten_action.triggered.connect(self.reset_to_start)
@@ -249,8 +290,27 @@ class DownloaderApp(QMainWindow):
     def show_about_dialog(self):
         QMessageBox.about(self, "Über", "Wahlkreis-PLZ-Mapper\n© 2025 Deine Firma oder Name")
 
-        def show_about_dialog(self):
-            QMessageBox.about(self, "Über", "Wahlkreis-PLZ-Mapper \n© 2025 Deine Firma oder Name")
+    def show_about_dialog(self):
+        QMessageBox.about(self, "Über", "Wahlkreis-PLZ-Mapper \n© 2025 Deine Firma oder Name")
+
+    def export_csv(self):
+        path, _ = QFileDialog.getSaveFileName(self, "CSV speichern", "ergebnisse.csv", "CSV-Dateien (*.csv)")
+        if not path:
+            return
+
+        headers = [self.tabelle.horizontalHeaderItem(i).text() for i in range(self.tabelle.columnCount())]
+        rows = []
+        for row in range(self.tabelle.rowCount()):
+            if self.tabelle.isRowHidden(row):
+                continue
+            data = []
+            for col in range(self.tabelle.columnCount()):
+                item = self.tabelle.item(row, col)
+                data.append(item.text() if item else "")
+            rows.append(data)
+
+        df = pd.DataFrame(rows, columns=headers)
+        df.to_csv(path, index=False)
 
     def filter_table(self, text):
         text = text.strip().lower()
