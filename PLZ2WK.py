@@ -139,6 +139,10 @@ class DownloaderApp(QWidget):
 
         self.setLayout(self.layout)
         self.tabelle.resizeColumnsToContents()
+        total_width = sum([self.tabelle.columnWidth(i) for i in range(self.tabelle.columnCount())])
+        print(total_width)
+        self.resize(total_width + 60, self.tabelle.sizeHint().height() + 150)
+        
 
     def ensure_plz_shapefile_exists(self):
         local_filename = os.path.join(tempfile.gettempdir(), os.path.basename(PLZ_URL))
@@ -312,7 +316,8 @@ class DownloaderApp(QWidget):
             self.download_label.setText(f"Fehler beim Mapping: {e}")
 
         self.tabelle.resizeColumnsToContents()
-
+        total_width = sum([self.tabelle.columnWidth(i) for i in range(self.tabelle.columnCount())])
+        self.resize(total_width + 80, self.tabelle.sizeHint().height() + 450)
 
     def load_and_map_shapefiles(self):
         if not self.plz_shapefile:
