@@ -7,11 +7,12 @@ import tempfile
 from bs4 import BeautifulSoup
 from datetime import datetime
 from PyQt6.QtWidgets import (
+    QMainWindow, QMenuBar, QMenu, QMessageBox,
     QApplication, QWidget, QVBoxLayout, QLabel, QProgressBar, QPushButton,
     QTableWidget, QTableWidgetItem, QHBoxLayout, QSplashScreen, QFileDialog, QLineEdit
 )
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
-from PyQt6.QtGui import QFont, QColor, QPixmap
+from PyQt6.QtGui import QFont, QColor, QPixmap, QAction
 import pandas as pd
 from functools import partial
 import geopandas as gpd
@@ -53,64 +54,66 @@ class ScraperThread(QThread):
 from PyQt6.QtWidgets import QLineEdit
 
 class SplashScreen(QWidget):
-    def __init__(self, total):
+    def __init__(self):
         super().__init__()
-        self.setWindowTitle("Daten werden geladen ...")
+        self.setWindowTitle("Lade Daten...")
+        self.setGeometry(100, 100, 400, 100)
+        layout = QVBoxLayout()
+        label = QLabel("Daten werden geladen, bitte warten...")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(label)
+        self.setLayout(layout)
+
+
+class DownloaderApp(QMainWindow):
+    def __init__(self, links):
+        super().__init__()
+        self.setWindowTitle("Wahlkreis-PLZ-Mapper")
         self.resize(600, 200)
         self.setStyleSheet("background-color: black; color: white;")
 
+        # Menüleiste
+        menubar = self.menuBar()
+        datei_menu = menubar.addMenu("Datei")
+        info_menu = menubar.addMenu("Info")
+
+        neustarten_action = QAction("Neustarten", self)
+        neustarten_action.triggered.connect(self.reset_to_start)
+        datei_menu.addAction(neustarten_action)
+
+        beenden_action = QAction("Beenden", self)
+        beenden_action.triggered.connect(QApplication.instance().quit)
+        datei_menu.addAction(beenden_action)
+
+        about_action = QAction("Über", self)
+        about_action.triggered.connect(self.show_about_dialog)
+        info_menu.addAction(about_action)
+
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
         self.layout = QVBoxLayout()
+        central_widget.setLayout(self.layout)
 
-
-
-        
-        
         self.label = QLabel("Initialisiere ...")
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.label.setFont(QFont("Arial", 12))
 
-        self.progress = QProgressBar()
-        self.progress.setRange(0, total)
-        self.progress.setValue(0)
-        self.progress.setStyleSheet("QProgressBar::chunk { background-color: white; }")
-
-        self.log = QLabel("")
-        self.log.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.log.setWordWrap(True)
-
-        self.layout.addWidget(self.label)
-        self.layout.addWidget(self.progress)
-        self.layout.addWidget(self.log)
-        self.setLayout(self.layout)
-
-    def update_progress(self, current, total):
-        self.label.setText(f"{current} von {total} Jahren verarbeitet ...")
-        self.progress.setValue(current)
-
-    def log_url(self, url, success):
-        color = "green" if success else "red"
-        self.log.setText(f"<span style='color:{color}'>{url}</span>")
-
-from PyQt6.QtWidgets import QLineEdit
-
-class DownloaderApp(QWidget):
-    def __init__(self, links):
-        super().__init__()
-        self.links = links
-        self.plz_shapefile = None
-        self.wk_shapefile = None
-        self.ensure_plz_shapefile_exists()
-        self.setWindowTitle("Wahlkreis-Downloader")
-        self.resize(1200, 600)
-
-
-        self.layout = QVBoxLayout()
+        
 
         self.filter_input = QLineEdit()
         self.filter_input.setPlaceholderText("Filter nach PLZ oder Wahlkreis...")
         self.filter_input.textChanged.connect(self.filter_table)
         self.filter_input.hide()
         self.layout.addWidget(self.filter_input)
+
+        self.links = links
+        self.plz_shapefile = None
+        self.wk_shapefile = None
+        self.ensure_plz_shapefile_exists()
+        self.back_button = QPushButton("Zurück")
+        self.back_button.clicked.connect(self.reset_to_start)
+        self.back_button.hide()
+        self.layout.addWidget(self.back_button)
 
         self.tabelle = QTableWidget()
         self.tabelle.setSortingEnabled(True)
@@ -137,10 +140,9 @@ class DownloaderApp(QWidget):
         self.layout.addWidget(self.download_label)
         self.layout.addWidget(self.download_bar)
 
-        self.setLayout(self.layout)
+        
         self.tabelle.resizeColumnsToContents()
         total_width = sum([self.tabelle.columnWidth(i) for i in range(self.tabelle.columnCount())])
-        print(total_width)
         self.resize(total_width + 60, self.tabelle.sizeHint().height() + 150)
         
 
@@ -201,38 +203,55 @@ class DownloaderApp(QWidget):
             self.download_label.setText(f"Fehler: {e}")
 
     def download_and_extract_plz(self):
-        self.download_label.setText("Lade PLZ-Daten...")
-        local_filename = os.path.join(tempfile.gettempdir(), os.path.basename(PLZ_URL))
-        try:
-            with requests.get(PLZ_URL, stream=True) as r:
-                r.raise_for_status()
-                total = int(r.headers.get('content-length', 0))
-                downloaded = 0
-                with open(local_filename, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-                            downloaded += len(chunk)
-                            if total > 0:
-                                percent = int(downloaded * 100 / total)
-                                self.download_bar.setValue(percent)
+        self.tabelle.setRowCount(len(self.links))
+        self.tabelle.setColumnCount(3)
+        self.tabelle.setHorizontalHeaderLabels(["Jahr", "Download-Link", "Mit PLZ matchen"])
+        self.filter_input.hide()
+        self.back_button.hide()
 
-            with zipfile.ZipFile(local_filename, 'r') as zip_ref:
-                extract_path = os.path.join(tempfile.gettempdir(), "plz_shapefiles")
-                zip_ref.extractall(extract_path)
+        for row, (jahr, url) in enumerate(self.links):
+            jahr_text = f"BTW {jahr}" if "bundestagswahlen" in url else str(jahr)
+            self.tabelle.setItem(row, 0, QTableWidgetItem(jahr_text))
+            self.tabelle.setItem(row, 1, QTableWidgetItem(url))
 
-            self.download_label.setText(f"PLZ-Daten entpackt: {extract_path}")
+            if DOWNLOAD_REGEX.search(url):
+                match_btn = QPushButton("Mit PLZ matchen")
+                match_btn.clicked.connect(partial(self.download_extract_and_map, url))
+                match_btn.setProperty("removable", True)
+                self.tabelle.setCellWidget(row, 2, match_btn)
 
-            # Suche nach der .shp-Datei
-            for root, dirs, files in os.walk(extract_path):
-                for file in files:
-                    if file.endswith(".shp"):
-                        self.plz_shapefile = os.path.join(root, file)
-                        break
-        except Exception as e:
-            self.download_label.setText(f"Fehler beim PLZ-Download: {e}")
+        self.tabelle.resizeColumnsToContents()
+        total_width = sum([self.tabelle.columnWidth(i) for i in range(self.tabelle.columnCount())])
+        self.resize(total_width + 80, self.tabelle.sizeHint().height() + 150)
 
-        
+    def reset_to_start(self):
+        self.tabelle.setRowCount(len(self.links))
+        self.tabelle.setColumnCount(3)
+        self.tabelle.setHorizontalHeaderLabels(["Jahr", "Download-Link", "Mit PLZ matchen"])
+        self.filter_input.hide()
+        self.back_button.hide()
+
+        for row, (jahr, url) in enumerate(self.links):
+            jahr_text = f"BTW {jahr}" if "bundestagswahlen" in url else str(jahr)
+            self.tabelle.setItem(row, 0, QTableWidgetItem(jahr_text))
+            self.tabelle.setItem(row, 1, QTableWidgetItem(url))
+
+            if DOWNLOAD_REGEX.search(url):
+                match_btn = QPushButton("Mit PLZ matchen")
+                match_btn.clicked.connect(partial(self.download_extract_and_map, url))
+                match_btn.setProperty("removable", True)
+                self.tabelle.setCellWidget(row, 2, match_btn)
+
+        self.tabelle.resizeColumnsToContents()
+        total_width = sum([self.tabelle.columnWidth(i) for i in range(self.tabelle.columnCount())])
+        self.resize(total_width + 80, self.tabelle.sizeHint().height() + 150)
+
+    def show_about_dialog(self):
+        QMessageBox.about(self, "Über", "Wahlkreis-PLZ-Mapper\n© 2025 Deine Firma oder Name")
+
+        def show_about_dialog(self):
+            QMessageBox.about(self, "Über", "Wahlkreis-PLZ-Mapper \n© 2025 Deine Firma oder Name")
+
     def filter_table(self, text):
         text = text.strip().lower()
         for row in range(self.tabelle.rowCount()):
@@ -312,6 +331,8 @@ class DownloaderApp(QWidget):
                 self.download_label.setText("Mapping abgeschlossen.")
                 self.filter_input.show()
 
+            self.back_button.show()
+
         except Exception as e:
             self.download_label.setText(f"Fehler beim Mapping: {e}")
 
@@ -352,20 +373,20 @@ class DownloaderApp(QWidget):
 if __name__ == '__main__':
     app = QApplication(sys.argv)
 
-    splash = SplashScreen(total=AKTUELLES_JAHR - STARTJAHR + 1)
+    splash = SplashScreen()
     splash.show()
 
     def show_main_window(links):
-      global hauptfenster  # Referenz behalten, sonst wird das Fenster geschlossen
-      splash.close()
-      hauptfenster = DownloaderApp(links)
-      hauptfenster.show()
+        global hauptfenster
+        splash.close()
+        hauptfenster = DownloaderApp(links)
+        hauptfenster.show()
 
 
     scraper = ScraperThread()
-    scraper.progress.connect(splash.update_progress)
-    scraper.url_checked.connect(splash.log_url)
-    scraper.finished.connect(show_main_window)
+    # Verknüpfung entfällt für SplashScreen
+    # Verknüpfung entfällt für SplashScreen
+    scraper.finished.connect(lambda links: show_main_window(links))
     scraper.start()
 
     sys.exit(app.exec())
