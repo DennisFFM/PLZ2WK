@@ -50,6 +50,8 @@ class ScraperThread(QThread):
             self.progress.emit(index + 1, len(jahre))
         self.finished.emit(self.links)
 
+from PyQt6.QtWidgets import QLineEdit
+
 class SplashScreen(QWidget):
     def __init__(self, total):
         super().__init__()
@@ -58,6 +60,11 @@ class SplashScreen(QWidget):
         self.setStyleSheet("background-color: black; color: white;")
 
         self.layout = QVBoxLayout()
+
+
+
+        
+        
         self.label = QLabel("Initialisiere ...")
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.label.setFont(QFont("Arial", 12))
@@ -84,6 +91,8 @@ class SplashScreen(QWidget):
         color = "green" if success else "red"
         self.log.setText(f"<span style='color:{color}'>{url}</span>")
 
+from PyQt6.QtWidgets import QLineEdit
+
 class DownloaderApp(QWidget):
     def __init__(self, links):
         super().__init__()
@@ -97,22 +106,26 @@ class DownloaderApp(QWidget):
 
         self.layout = QVBoxLayout()
 
+        self.filter_input = QLineEdit()
+        self.filter_input.setPlaceholderText("Filter nach PLZ oder Wahlkreis...")
+        self.filter_input.textChanged.connect(self.filter_table)
+        self.filter_input.hide()
+        self.layout.addWidget(self.filter_input)
+
         self.tabelle = QTableWidget()
-        self.tabelle.setColumnCount(4)
-        self.tabelle.setHorizontalHeaderLabels(["Jahr", "Download-Link", "Herunterladen", "Mit PLZ matchen"])
+        self.tabelle.setSortingEnabled(True)
+        self.tabelle.setColumnCount(3)
+        self.tabelle.setHorizontalHeaderLabels(["Jahr", "Download-Link", "Mit PLZ matchen"])
         self.tabelle.setRowCount(len(links))
 
         for row, (jahr, url) in enumerate(links):
-            self.tabelle.setItem(row, 0, QTableWidgetItem(str(jahr)))
+            jahr_text = f"BTW {jahr}" if "bundestagswahlen" in url else str(jahr)
+            self.tabelle.setItem(row, 0, QTableWidgetItem(jahr_text))
             self.tabelle.setItem(row, 1, QTableWidgetItem(url))
-
-            download_btn = QPushButton("Herunterladen")
-            download_btn.clicked.connect(partial(self.download_file, url))
-            self.tabelle.setCellWidget(row, 2, download_btn)
 
             match_btn = QPushButton("Mit PLZ matchen")
             match_btn.clicked.connect(partial(self.download_extract_and_map, url))
-            self.tabelle.setCellWidget(row, 3, match_btn)
+            self.tabelle.setCellWidget(row, 2, match_btn)
 
         self.download_label = QLabel("Download-Status")
         self.download_bar = QProgressBar()
@@ -120,11 +133,6 @@ class DownloaderApp(QWidget):
         self.layout.addWidget(self.tabelle)
         self.layout.addWidget(self.download_label)
         self.layout.addWidget(self.download_bar)
-
-        
-        self.mapping_button = QPushButton("Wahlkreis-Shapefile laden und mit PLZ matchen")
-        self.mapping_button.clicked.connect(self.load_and_map_shapefiles)
-        self.layout.addWidget(self.mapping_button)
 
         self.setLayout(self.layout)
 
@@ -216,6 +224,18 @@ class DownloaderApp(QWidget):
         except Exception as e:
             self.download_label.setText(f"Fehler beim PLZ-Download: {e}")
 
+        
+    def filter_table(self, text):
+        text = text.strip().lower()
+        for row in range(self.tabelle.rowCount()):
+            match = False
+            for col in range(self.tabelle.columnCount()):
+                item = self.tabelle.item(row, col)
+                if item and text in item.text().lower():
+                    match = True
+                    break
+            self.tabelle.setRowHidden(row, not match)
+
     def download_extract_and_map(self, url):
         if not self.plz_shapefile:
             self.download_label.setText("PLZ-Shapefile nicht gefunden. Bitte zuerst PLZ-Daten laden.")
@@ -272,9 +292,12 @@ class DownloaderApp(QWidget):
                 self.tabelle.setItem(i, 1, QTableWidgetItem(str(row[wkr_spalte])))
 
                 self.download_label.setText("Mapping abgeschlossen.")
+            self.filter_input.show()
 
         except Exception as e:
             self.download_label.setText(f"Fehler beim Mapping: {e}")
+
+
 
 
     def load_and_map_shapefiles(self):
